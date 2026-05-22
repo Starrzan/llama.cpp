@@ -93,15 +93,9 @@ macro(detect_and_find_package package_name)
     endif()
 endmacro()
 
-detect_and_find_package(IntelSYCL)
-if (IntelSYCL_FOUND)
-    # Use oneAPI CMake when possible
-    target_link_libraries(ggml-sycl PRIVATE IntelSYCL::SYCL_CXX)
-else()
-    # Fallback to the simplest way of enabling SYCL when using intel/llvm nightly for instance
-    target_compile_options(ggml-sycl PRIVATE "-fsycl")
-    target_link_options(ggml-sycl PRIVATE "-fsycl")
-endif()
+# dpclang-6 does not provide IntelSYCL CMake config; skip detection and use -fsycl directly
+target_compile_options(ggml-sycl PRIVATE "-fsycl")
+target_link_options(ggml-sycl PRIVATE "-fsycl")
 
 target_compile_options(ggml-sycl PRIVATE "-Wno-narrowing")
 
@@ -174,8 +168,22 @@ if (GGML_SYCL_TARGET STREQUAL "INTEL")
     if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
         set(SYCL_COMPILER ON)
     endif()
-    find_package(MKL REQUIRED)
-    target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
+    find_package(MKL QUIET)
+    if(MKL_FOUND AND TARGET MKL::MKL_SYCL::BLAS)
+        target_link_libraries(ggml-sycl PRIVATE MKL::MKL_SYCL::BLAS)
+    elseif(DEFINED MKL_ROOT)
+        message(STATUS "MKL CMake targets not available, linking manually from MKL_ROOT=${MKL_ROOT}")
+        target_link_libraries(ggml-sycl PRIVATE
+            ${MKL_ROOT}/lib/libmkl_sycl.so
+            ${MKL_ROOT}/lib/libmkl_sycl_blas.so
+            ${MKL_ROOT}/lib/libmkl_intel_ilp64.so
+            ${MKL_ROOT}/lib/libmkl_core.so
+            ${MKL_ROOT}/lib/libmkl_sequential.so
+            ${MKL_ROOT}/lib/libmkl_sycl_lapack.so
+            ${MKL_ROOT}/lib/libmkl_sycl_vm.so
+            ${MKL_ROOT}/lib/libmkl_sycl_rng.so
+        )
+    endif()
 else()
     # default for other target
     message(FATAL_ERROR "GGML_SYCL_TARGET is not supported")
