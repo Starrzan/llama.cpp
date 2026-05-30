@@ -158,8 +158,11 @@ endif()
 
 if (GGML_SYCL_TARGET STREQUAL "INTEL")
     add_compile_definitions(GGML_SYCL_WARP_SIZE=16)
+    # NOTE: -ze-intel-greater-than-4GB-buffer-required removed — it breaks JIT
+    # compilation on the CPU SYCL device (RMS_NORM crash when ops fall back).
+    # The flag is only needed for GPUs with <4GB VRAM. Intel Arc has 58GB.
     if (NOT GGML_SYCL_DEVICE_ARCH)
-        target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
+        # target_link_options(ggml-sycl PRIVATE -Xs -ze-intel-greater-than-4GB-buffer-required)
     else()
         message(STATUS "Skipping -ze-intel-greater-than-4GB-buffer-required for spir64_gen AOT")
     endif()
