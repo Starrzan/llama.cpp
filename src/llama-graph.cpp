@@ -2253,11 +2253,46 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    // NOTE: When turbo cache types are used with SYCL, the cache is allocated
-    // as F32 (not turbo-compressed) because SYCL get_rows lacks turbo dequantize.
-    // So K/V are already F32 and no WHT/dequantization is needed here.
-    // WHT pre-rotate + inverse WHT are only used when turbo types are stored
-    // natively in the KV cache (requires custom FA kernels).
+    // TurboQuant: WHT pre-rotate queries when turbo cache types are active
+    auto is_turbo = [](ggml_type t) -> bool {
+        return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
+               t == GGML_TYPE_TURBO4_0;
+    };
+    if (is_turbo(k->type) || is_turbo(v->type)) {
+        if (q->ne[0] % 128 != 0) {
+            const int64_t pad = ((q->ne[0] + 127) / 128) * 128 - q->ne[0];
+            q = ggml_pad(ctx0, q, pad, 0, 0, 0);
+        }
+        if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
+        ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
+        q = ggml_turbo_wht(ctx0, q, 0, 0, scale); // forward WHT
+    }
+
+    // TurboQuant: if cache is turbo-allocated, decompress to F32 before attention.
+    // The decompress runs on the same backend as the cache (CPU), producing F32 tensors
+    // that the FA kernel can consume on any backend.
+    {
+        if (is_turbo(k->type)) {
+            // Decompress K: create F32 buffer and use cpy for type conversion
+            ggml_tensor * k_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, k->ne[0], k->ne[1], k->ne[2]);
+            k = ggml_cpy(ctx0, k, k_f32);
+            // Apply WHT rotation for turbo domain matching
+            if (k->ne[0] % 128 == 0) {
+                if (!ggml_is_contiguous(k)) { k = ggml_cont(ctx0, k); }
+                ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
+                k = ggml_turbo_wht(ctx0, k, 0, 0, scale); // forward WHT
+            }
+        }
+        if (is_turbo(v->type)) {
+            ggml_tensor * v_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, v->ne[0], v->ne[1], v->ne[2]);
+            v = ggml_cpy(ctx0, v, v_f32);
+            if (v->ne[0] % 128 == 0) {
+                if (!ggml_is_contiguous(v)) { v = ggml_cont(ctx0, v); }
+                ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
+                v = ggml_turbo_wht(ctx0, v, 0, 0, scale);
+            }
+        }
+    }
 
     ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
 
@@ -2267,12 +2302,14 @@ ggml_tensor * llm_graph_context::build_attn(
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
                    t == GGML_TYPE_TURBO4_0;
         };
-        if (is_turbo(k->type)) {
-            const int turbo_group = (k->ne[0] % 128 == 0) ? 128 : 64;
+        // Check original cache type (before decompress)
+        ggml_tensor * v_check = mctx_cur->get_v(ctx0, il);
+        if (is_turbo(v_check->type)) {
+            const int turbo_group = (v_check->ne[0] % 128 == 0) ? 128 : 64;
             if (cur->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
                 ggml_tensor * innerq_scale = mctx_cur->get_turbo_innerq_scale_inv();
-                cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group, innerq_scale);  // 1 = inverse WHT
+                cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group, innerq_scale); // inverse WHT
             }
         }
     }
