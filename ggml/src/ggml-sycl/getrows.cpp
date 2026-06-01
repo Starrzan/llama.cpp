@@ -11,6 +11,7 @@
 //
 
 #include "ggml-impl.h"
+#include "ggml-common.h"
 #include "common.hpp"
 #include "dequantize.hpp"
 #include "getrows.hpp"
@@ -212,22 +213,28 @@ void ggml_sycl_op_get_rows(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
             src1_i32, (float *)dst->data, ctx.stream());
             break;
         case GGML_TYPE_TURBO3_0: {
+            const int64_t ne00_t = dst->src[0]->ne[0];
+            const int64_t ne10_t = dst->src[1]->ne[0];
+            const int64_t ne12_t = dst->src[1]->ne[2];
             ggml_sycl_get_rows_turbo3(ctx,
                 dst->src[0]->data, src1_i32, (float *)dst->data,
-                ne00, ne10, ne12,
+                ne00_t, ne10_t, ne12_t,
                 dst->src[0]->nb[1], dst->src[0]->nb[2], dst->src[0]->nb[3],
-                dst->nb[1]/4, dst->nb[2]/4, dst->nb[3]/4,
-                dst->src[1]->nb[1]/4, dst->src[1]->nb[2]/4, dst->src[1]->nb[3]/4,
+                dst->nb[1], dst->nb[2], dst->nb[3],
+                dst->src[1]->nb[1], dst->src[1]->nb[2], dst->src[1]->nb[3],
                 ctx.stream());
             break;
         }
         case GGML_TYPE_TURBO2_0: {
+            const int64_t ne00_t = dst->src[0]->ne[0];
+            const int64_t ne10_t = dst->src[1]->ne[0];
+            const int64_t ne12_t = dst->src[1]->ne[2];
             ggml_sycl_get_rows_turbo2(ctx,
                 dst->src[0]->data, src1_i32, (float *)dst->data,
-                ne00, ne10, ne12,
+                ne00_t, ne10_t, ne12_t,
                 dst->src[0]->nb[1], dst->src[0]->nb[2], dst->src[0]->nb[3],
-                dst->nb[1]/4, dst->nb[2]/4, dst->nb[3]/4,
-                dst->src[1]->nb[1]/4, dst->src[1]->nb[2]/4, dst->src[1]->nb[3]/4,
+                dst->nb[1], dst->nb[2], dst->nb[3],
+                dst->src[1]->nb[1], dst->src[1]->nb[2], dst->src[1]->nb[3],
                 ctx.stream());
             break;
         }
