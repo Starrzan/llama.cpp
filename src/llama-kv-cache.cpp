@@ -233,15 +233,10 @@ llama_kv_cache::llama_kv_cache(
             auto * dev = model.dev_layer(il);
             buft = ggml_backend_dev_buffer_type(dev);
             dev_name = ggml_backend_dev_name(dev);
-            if (is_turbo(type_k)) {
-                type_k = GGML_TYPE_F32;
-                LLAMA_LOG_INFO("%s: turbo K type → F32 on %s (scheduler limitation)\n",
-                               __func__, dev_name);
-            }
-            if (is_turbo(type_v)) {
-                type_v = GGML_TYPE_F32;
-                LLAMA_LOG_INFO("%s: turbo V type → F32 on %s (scheduler limitation)\n",
-                               __func__, dev_name);
+            // Force CPU buffer for turbo KV cache — get_rows will dequantize on CPU
+            if (is_turbo(type_k) || is_turbo(type_v)) {
+                buft = ggml_backend_cpu_buffer_type();
+                dev_name = "CPU (turbo)";
             }
         }
 

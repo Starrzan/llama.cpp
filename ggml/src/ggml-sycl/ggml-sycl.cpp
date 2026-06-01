@@ -5020,8 +5020,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         (ggml_backend_sycl_device_context *)dev->context;
     int device = sycl_ctx->device;
 
-    // TurboQuant types: SYCL backend doesn't have native kernels for these.
-    // Only allow pure data-movement ops; everything else falls back to CPU.
+    // TurboQuant types: only allow data-movement ops.
+    // Rejecting everything else forces the scheduler to split the graph
+    // at turbo boundaries, inserting CPY ops between CPU(turbo) and GPU(f32).
     {
         auto is_turbo = [](ggml_type t) -> bool {
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
@@ -5030,30 +5031,14 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         };
         bool has_turbo = is_turbo(op->type);
         if (!has_turbo) {
-            for (int i = 0; i < GGML_MAX_SRC; i++) {
-                if (op->src[i] && is_turbo(op->src[i]->type)) {
-                    has_turbo = true;
-                    break;
-                }
+            for (int i = 0; i < GGML_MAX_SRC && op->src[i]; i++) {
+                if (is_turbo(op->src[i]->type)) { has_turbo = true; break; }
             }
         }
-        if (has_turbo) {
-            switch (op->op) {
-                case GGML_OP_NONE:
-                case GGML_OP_VIEW:
-                case GGML_OP_CPY:
-                case GGML_OP_CONT:
-                case GGML_OP_RESHAPE:
-                case GGML_OP_PERMUTE:
-                case GGML_OP_TRANSPOSE:
-                case GGML_OP_GET_ROWS:
-                case GGML_OP_ADD:
-                case GGML_OP_DIAG_MASK_INF:
-                case GGML_OP_SOFT_MAX:
-                    return true;
-                default:
-                    return false;
-            }
+        // Allow turbo types to be processed on CPU backend (index 0)
+        // but reject on SYCL to force scheduler splitting
+        if (has_turbo && device > 0) {
+            return false;
         }
     }
 
