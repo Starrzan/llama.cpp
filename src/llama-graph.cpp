@@ -2269,23 +2269,29 @@ ggml_tensor * llm_graph_context::build_attn(
     }
 
     // TurboQuant: if cache is turbo-allocated, decompress to F32 before attention.
-    // The decompress runs on the same backend as the cache (CPU), producing F32 tensors
-    // that the FA kernel can consume on any backend.
+    // Uses get_rows with identity indices to dequantize turbo → F32.
     {
         if (is_turbo(k->type)) {
-            // Decompress K: create F32 buffer and use cpy for type conversion
-            ggml_tensor * k_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, k->ne[0], k->ne[1], k->ne[2]);
-            k = ggml_cpy(ctx0, k, k_f32);
+            int64_t n_rows = k->ne[1] * k->ne[2] * k->ne[3];
+            // Create identity index tensor [0, 1, 2, ..., n_rows-1]
+            ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+            // Fill with identity indices
+            int32_t * ids_data = (int32_t *) ids->data;
+            for (int64_t i = 0; i < n_rows; i++) ids_data[i] = (int32_t)i;
+            k = ggml_get_rows(ctx0, k, ids);
             // Apply WHT rotation for turbo domain matching
             if (k->ne[0] % 128 == 0) {
                 if (!ggml_is_contiguous(k)) { k = ggml_cont(ctx0, k); }
                 ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
-                k = ggml_turbo_wht(ctx0, k, 0, 0, scale); // forward WHT
+                k = ggml_turbo_wht(ctx0, k, 0, 0, scale);
             }
         }
         if (is_turbo(v->type)) {
-            ggml_tensor * v_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, v->ne[0], v->ne[1], v->ne[2]);
-            v = ggml_cpy(ctx0, v, v_f32);
+            int64_t n_rows = v->ne[1] * v->ne[2] * v->ne[3];
+            ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
+            int32_t * ids_data = (int32_t *) ids->data;
+            for (int64_t i = 0; i < n_rows; i++) ids_data[i] = (int32_t)i;
+            v = ggml_get_rows(ctx0, v, ids);
             if (v->ne[0] % 128 == 0) {
                 if (!ggml_is_contiguous(v)) { v = ggml_cont(ctx0, v); }
                 ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
