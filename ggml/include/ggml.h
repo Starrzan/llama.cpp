@@ -429,7 +429,13 @@ extern "C" {
         GGML_TYPE_MXFP4   = 39, // MXFP4 (1 block)
         GGML_TYPE_NVFP4   = 40, // NVFP4 (4 blocks, E4M3 scale)
         GGML_TYPE_Q1_0    = 41,
-        GGML_TYPE_COUNT   = 42,
+        GGML_TYPE_TURBO2_0 = 42, // TurboQuant 2-bit KV cache: WHT + 2-bit PolarQuant
+        GGML_TYPE_TURBO3_0 = 43, // TurboQuant 3-bit KV cache: WHT + 3-bit PolarQuant
+        GGML_TYPE_TURBO4_0 = 44, // TurboQuant 4-bit KV cache: WHT + 4-bit PolarQuant
+        GGML_TYPE_TQ3_1S   = 45, // TurboQuant 3-bit weight: WHT-rotated, block_size=32
+        GGML_TYPE_TQ4_1S   = 46, // TurboQuant 4-bit weight: WHT-rotated, block_size=32
+
+        GGML_TYPE_COUNT   = 47,
     };
 
     // precision
@@ -497,6 +503,7 @@ extern "C" {
         GGML_OP_CUMSUM,
         GGML_OP_MEAN,
         GGML_OP_ARGMAX,
+        GGML_OP_TURBO_WHT,
         GGML_OP_COUNT_EQUAL,
         GGML_OP_REPEAT,
         GGML_OP_REPEAT_BACK,
@@ -2746,6 +2753,12 @@ extern "C" {
 
     GGML_API struct ggml_tensor * ggml_set_zero(struct ggml_tensor * tensor);
 
+    GGML_API struct ggml_tensor * ggml_turbo_wht(
+        struct ggml_context * ctx,
+        struct ggml_tensor  * a,
+        int                  inverse,
+        int                  group_size,
+        struct ggml_tensor  * innerq_scale_inv);
     //
     // quantization
     //

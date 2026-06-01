@@ -117,3 +117,7 @@ void ggml_compute_forward_opt_step_sgd(const struct ggml_compute_params * params
 #ifdef __cplusplus
 }
 #endif
+
+void ggml_compute_forward_turbo_wht(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst);

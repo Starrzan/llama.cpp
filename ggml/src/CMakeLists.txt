@@ -205,6 +205,7 @@ add_library(ggml-base
             ggml-threading.cpp
             ggml-threading.h
             ggml-quants.c
+    ${CMAKE_CURRENT_SOURCE_DIR}/ggml-turbo-quant.c
             ggml-quants.h
             gguf.cpp)
 

@@ -11371,3 +11371,21 @@ void ggml_compute_forward_fwht(const ggml_compute_params * params, ggml_tensor *
             }
     }
 }
+
+void ggml_compute_forward_turbo_wht(
+    const struct ggml_compute_params * params,
+    struct ggml_tensor * dst) {
+
+    const ggml_tensor * src0 = dst->src[0];
+    GGML_ASSERT(src0->type == GGML_TYPE_F32);
+    GGML_ASSERT(dst->type == GGML_TYPE_F32);
+
+    // WHT is applied in-place via butterfly operations
+    // Parameters: inverse (0=fwd, 1=inv), group_size, scale
+    // For now, passthrough - the actual WHT constants are in turbo-rotation-data.h
+    // Full implementation in ggml-turbo-quant.c via ggml_turbo_wht()
+
+    // TODO: forward to ggml_turbo_wht() implementation
+    GGML_UNUSED(params);
+    GGML_UNUSED(dst);
+}

@@ -277,6 +277,60 @@ typedef struct {
 } block_tq2_0;
 static_assert(sizeof(block_tq2_0) == sizeof(ggml_half) + QK_K / 4, "wrong tq2_0 block size/padding");
 
+
+// TurboQuant 3-bit KV cache: Walsh-Hadamard Transform + Lloyd-Max PolarQuant (3-bit)
+#define QK_TURBO3 128
+#define QK_TURBO3_GROUP 128
+#define NL_TURBO3     (QK_TURBO3 / 16)
+#define NL_TURBO3_VEC (QK_TURBO3 / 4)
+typedef struct {
+    ggml_half  norm;
+    uint8_t    qs[QK_TURBO3 / 4];      // 32 bytes: lower 2 bits of 3-bit index
+    uint8_t    signs[QK_TURBO3 / 8];   // 16 bytes: upper 1 bit of 3-bit index
+} block_turbo3_0;
+static_assert(sizeof(block_turbo3_0) == sizeof(ggml_half) + QK_TURBO3/4 + QK_TURBO3/8, "wrong turbo3_0 block size/padding");
+
+// TurboQuant 4-bit KV cache: WHT + Lloyd-Max PolarQuant (4-bit)
+#define QK_TURBO4 128
+// Legacy 3-bit PolarQuant + 1-bit QJL (matches ggml-turbo-quant.c expectations)
+typedef struct {
+    ggml_half  norm;                    //  2 bytes
+    ggml_half  rnorm;                   //  2 bytes: residual norm for QJL scale
+    uint8_t    qs[QK_TURBO4 * 3 / 8];  // 48 bytes: 3-bit PolarQuant indices
+    uint8_t    signs[QK_TURBO4 / 8];   // 16 bytes: 1-bit QJL signs
+} block_turbo4_0;                       // 68 bytes total
+static_assert(sizeof(block_turbo4_0) == 2*sizeof(ggml_half) + QK_TURBO4*3/8 + QK_TURBO4/8, "wrong turbo4_0 block size");
+
+// TurboQuant 2-bit KV cache: WHT + Lloyd-Max PolarQuant (2-bit)
+#define QK_TURBO2 128
+#define QK_TURBO2_GROUP 128
+#define NL_TURBO2     (QK_TURBO2 / 16)
+#define NL_TURBO2_VEC (QK_TURBO2 / 4)
+typedef struct {
+    ggml_half  norm;
+    uint8_t    qs[QK_TURBO2 / 4];      // 32 bytes: 2-bit indices (4 per byte)
+} block_turbo2_0;
+static_assert(sizeof(block_turbo2_0) == sizeof(ggml_half) + QK_TURBO2/4, "wrong turbo2_0 block size/padding");
+
+// TQ3_1S: WHT-rotated 3-bit weight quantization
+// Block size 32, dual half-block scales (d0 for [0..15], d1 for [16..31])
+#define QK_TQ3_0 32
+typedef struct {
+    ggml_half d0;
+    ggml_half d1;
+    uint8_t   qs[QK_TQ3_0 * 3 / 8];  // 12 bytes: 3-bit indices packed
+} block_tq3_1s;
+static_assert(sizeof(block_tq3_1s) == 16, "wrong tq3_1s block size");
+
+// TQ4_1S: WHT-rotated 4-bit weight quantization
+#define QK_TQ4_1S 32
+typedef struct {
+    ggml_half d0;
+    ggml_half d1;
+    uint8_t   qs[QK_TQ4_1S / 2];     // 16 bytes: 4-bit indices nibble-packed
+} block_tq4_1s;
+static_assert(sizeof(block_tq4_1s) == 20, "wrong tq4_1s block size");
+
 //
 // Super-block quantization structures
 //
