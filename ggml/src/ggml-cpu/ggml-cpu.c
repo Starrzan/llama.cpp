@@ -7,6 +7,7 @@
 #include "ggml-cpu-impl.h"
 #include "ggml-impl.h"
 #include "quants.h"
+#include "ggml-quants.h"
 #include "ggml-threading.h"
 #include "unary-ops.h"
 #include "binary-ops.h"
@@ -15,24 +16,6 @@
 #include "ggml.h"
 #include "common.h"
 
-// TurboQuant CPU vec_dot forward declarations
-static void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
-                                       const void * GGML_RESTRICT vx, size_t bx,
-                                       const void * GGML_RESTRICT vy, size_t by,
-                                       int nrc);
-static void ggml_vec_dot_turbo4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
-                                       const void * GGML_RESTRICT vx, size_t bx,
-                                       const void * GGML_RESTRICT vy, size_t by,
-                                       int nrc);
-static void ggml_vec_dot_turbo2_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
-                                       const void * GGML_RESTRICT vx, size_t bx,
-                                       const void * GGML_RESTRICT vy, size_t by,
-                                       int nrc);
-
-// TurboQuant quantize row forward declarations
-GGML_API void quantize_row_turbo2_0_ref(const float * GGML_RESTRICT x, block_turbo2_0 * GGML_RESTRICT y, int64_t k);
-GGML_API void quantize_row_turbo3_0_ref(const float * GGML_RESTRICT x, block_turbo3_0 * GGML_RESTRICT y, int64_t k);
-GGML_API void quantize_row_turbo4_0_ref(const float * GGML_RESTRICT x, block_turbo4_0 * GGML_RESTRICT y, int64_t k);
 
 #if defined(_MSC_VER) || defined(__MINGW32__)
 #include <malloc.h> // using malloc.h with MSC/MINGW
@@ -418,21 +401,6 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .vec_dot                  = ggml_vec_dot_tq2_0_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
         .nrows                    = 1,
-    },
-    [GGML_TYPE_TURBO2_0] = {
-        .from_float = (ggml_from_float_t) quantize_row_turbo2_0_ref,
-        .vec_dot    = (ggml_vec_dot_t) ggml_vec_dot_turbo2_0_f32,
-        .vec_dot_type = GGML_TYPE_F32,
-    },
-    [GGML_TYPE_TURBO3_0] = {
-        .from_float = (ggml_from_float_t) quantize_row_turbo3_0_ref,
-        .vec_dot    = (ggml_vec_dot_t) ggml_vec_dot_turbo3_0_f32,
-        .vec_dot_type = GGML_TYPE_F32,
-    },
-    [GGML_TYPE_TURBO4_0] = {
-        .from_float = (ggml_from_float_t) quantize_row_turbo4_0_ref,
-        .vec_dot    = (ggml_vec_dot_t) ggml_vec_dot_turbo4_0_f32,
-        .vec_dot_type = GGML_TYPE_F32,
     },
     [GGML_TYPE_I32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_i32,

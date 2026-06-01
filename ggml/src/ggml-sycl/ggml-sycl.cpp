@@ -452,22 +452,23 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor, "\n").c_str());
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *)buffer->context;
 
-    // TurboQuant types: SYCL backend doesn't support these natively.
-    // Reject allocation so tensors fall through to CPU backend.
-    // Check both the tensor itself and its view source (if any).
+    // TurboQuant KV cache types (TURBO2_0/3_0/4_0): SYCL backend doesn't support
+    // these natively. Reject allocation so tensors fall through to CPU backend.
+    // Note: TQ3_1S and TQ4_1S weight types ARE allowed to allocate on SYCL --
+    // they are handled by the op-level rejection below (line ~5040) which forces
+    // turbo ops to CPU, where ggml-turbo-quant.c dequantizes them.
     {
-        auto is_turbo = [](ggml_type t) -> bool {
+        auto is_turbo_kv = [](ggml_type t) -> bool {
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
-                   t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_TQ3_1S ||
-                   t == GGML_TYPE_TQ4_1S;
+                   t == GGML_TYPE_TURBO4_0;
         };
-        if (is_turbo(tensor->type)) {
-            GGML_LOG_WARN("[SYCL] rejecting turbo type %s for tensor %s\n",
+        if (is_turbo_kv(tensor->type)) {
+            GGML_LOG_WARN("[SYCL] rejecting turbo KV type %s for tensor %s\n",
                           ggml_type_name(tensor->type), tensor->name);
             return GGML_STATUS_FAILED;
         }
-        if (tensor->view_src && is_turbo(tensor->view_src->type)) {
-            GGML_LOG_WARN("[SYCL] rejecting view of turbo type %s for tensor %s\n",
+        if (tensor->view_src && is_turbo_kv(tensor->view_src->type)) {
+            GGML_LOG_WARN("[SYCL] rejecting view of turbo KV type %s for tensor %s\n",
                           ggml_type_name(tensor->view_src->type), tensor->name);
             return GGML_STATUS_FAILED;
         }
