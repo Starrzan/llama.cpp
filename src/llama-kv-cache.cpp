@@ -226,25 +226,11 @@ llama_kv_cache::llama_kv_cache(
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
         if (offload) {
-            // TurboQuant types require dequantize support in get_rows which
-            // SYCL doesn't have yet. Use F32 cache on GPU for correctness.
-            auto is_turbo = [](ggml_type t) -> bool {
-                return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
-                       t == GGML_TYPE_TURBO4_0;
-            };
             auto * dev = model.dev_layer(il);
             buft = ggml_backend_dev_buffer_type(dev);
             dev_name = ggml_backend_dev_name(dev);
-            if (is_turbo(type_k)) {
-                type_k = GGML_TYPE_F32;
-                LLAMA_LOG_INFO("%s: turbo K type → using F32 cache on %s (SYCL get_rows lacks turbo dequantize)\n",
-                               __func__, dev_name);
-            }
-            if (is_turbo(type_v)) {
-                type_v = GGML_TYPE_F32;
-                LLAMA_LOG_INFO("%s: turbo V type → using F32 cache on %s (SYCL get_rows lacks turbo dequantize)\n",
-                               __func__, dev_name);
-            }
+            // Turbo types are now supported on SYCL via dedicated get_rows kernels
+            // No need to force F32 allocation
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
