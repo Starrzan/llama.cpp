@@ -2141,6 +2141,10 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             {
                 // nop
             } break;
+        case GGML_OP_TURBO_WHT:
+            {
+                GGML_ABORT("GGML_OP_TURBO_WHT not implemented on CPU");
+            }
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -2462,6 +2466,10 @@ static int ggml_get_n_tasks(struct ggml_tensor * node, int n_threads) {
         case GGML_OP_OPT_STEP_SGD:
             {
                 n_tasks = n_threads;
+            } break;
+        case GGML_OP_TURBO_WHT:
+            {
+                n_tasks = 1;
             } break;
         case GGML_OP_NONE:
             {
