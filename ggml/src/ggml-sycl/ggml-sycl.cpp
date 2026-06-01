@@ -4998,6 +4998,42 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
     ggml_backend_sycl_device_context *sycl_ctx =
         (ggml_backend_sycl_device_context *)dev->context;
     int device = sycl_ctx->device;
+
+    // TurboQuant types: SYCL backend doesn't have native kernels for these.
+    // Only allow pure data-movement ops; everything else falls back to CPU.
+    {
+        auto is_turbo = [](ggml_type t) -> bool {
+            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
+                   t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_TQ3_1S ||
+                   t == GGML_TYPE_TQ4_1S;
+        };
+        bool has_turbo = is_turbo(op->type);
+        if (!has_turbo) {
+            for (int i = 0; i < GGML_MAX_SRC; i++) {
+                if (op->src[i] && is_turbo(op->src[i]->type)) {
+                    has_turbo = true;
+                    break;
+                }
+            }
+        }
+        if (has_turbo) {
+            switch (op->op) {
+                case GGML_OP_NONE:
+                case GGML_OP_VIEW:
+                case GGML_OP_CPY:
+                case GGML_OP_CONT:
+                case GGML_OP_RESHAPE:
+                case GGML_OP_PERMUTE:
+                case GGML_OP_TRANSPOSE:
+                case GGML_OP_GET_ROWS:
+                case GGML_OP_ADD:  // elementwise, will be on dequantized data
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }
+
     switch (op->op) {
         case GGML_OP_CONV_TRANSPOSE_1D:
             {

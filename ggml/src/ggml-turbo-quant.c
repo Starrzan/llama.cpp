@@ -23,9 +23,16 @@
 /* Forward declarations for GGML_API symbols defined in this file (satisfies
  * -Wmissing-prototypes under upstream CI's -Werror policy). */
 GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size);
+GGML_API void quantize_row_tq3_1s_ref(const float * GGML_RESTRICT x, block_tq3_1s * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_tq3_1s(const block_tq3_1s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_tq3_1s(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
+GGML_API void quantize_row_tq4_1s_ref(const float * GGML_RESTRICT x, block_tq4_1s * GGML_RESTRICT y, int64_t k);
+GGML_API void dequantize_row_tq4_1s(const block_tq4_1s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
+GGML_API size_t quantize_tq4_1s(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 /* Global: WHT group size for CPU quantize path (set by CPU SET_ROWS handler) */
-GGML_API int turbo3_cpu_wht_group_size = 0;
+GGML_API extern int turbo3_cpu_wht_group_size;
+int turbo3_cpu_wht_group_size = 0;
 
 /* ---------- constants ---------- */
 
