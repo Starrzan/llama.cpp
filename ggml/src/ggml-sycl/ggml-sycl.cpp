@@ -5047,7 +5047,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 case GGML_OP_PERMUTE:
                 case GGML_OP_TRANSPOSE:
                 case GGML_OP_GET_ROWS:
-                case GGML_OP_ADD:  // elementwise, will be on dequantized data
+                case GGML_OP_ADD:
+                case GGML_OP_DIAG_MASK_INF:
+                case GGML_OP_SOFT_MAX:
                     return true;
                 default:
                     return false;
