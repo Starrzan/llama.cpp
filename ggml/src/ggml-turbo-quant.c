@@ -31,7 +31,7 @@ GGML_API void dequantize_row_tq4_1s(const block_tq4_1s * GGML_RESTRICT x, float 
 GGML_API size_t quantize_tq4_1s(const float * GGML_RESTRICT src, void * GGML_RESTRICT dst, int64_t nrows, int64_t n_per_row, const float * imatrix);
 
 /* Global: WHT group size for CPU quantize path (set by CPU SET_ROWS handler) */
-GGML_API int turbo3_cpu_wht_group_size = 0;
+int turbo3_cpu_wht_group_size = 0;
 
 /* ---------- constants ---------- */
 
