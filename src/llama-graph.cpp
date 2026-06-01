@@ -1984,8 +1984,17 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_flash_attn_ext_add_sinks(cur, sinks);
         ggml_flash_attn_ext_set_prec (cur, GGML_PREC_F32);
 
-        // NOTE: No inverse WHT needed — K/V are dequantized to F32 before attention,
-        // so the output is already in normal domain.
+        // TurboQuant: inverse WHT on FA output when V values are WHT-rotated
+        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
+            const bool k_is_turbo = (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0);
+            const ggml_tensor * group_src = k_is_turbo ? k : v;
+            const int turbo_group = (group_src->ne[0] % 128 == 0) ? 128 : 64;
+            if (cur->ne[0] % turbo_group == 0) {
+                if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
+                ggml_tensor * innerq_scale = mctx ? mctx->get_turbo_innerq_scale_inv() : nullptr;
+                cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group, innerq_scale);  // 1 = inverse
+            }
+        }
 
 
         if (v_mla) {
@@ -2054,7 +2063,17 @@ ggml_tensor * llm_graph_context::build_attn_mha(
         ggml_tensor * kqv = ggml_mul_mat(ctx0, v, kq);
         cb(kqv, "kqv", il);
 
-        // NOTE: No inverse WHT needed — K/V are dequantized to F32 before attention.
+        // TurboQuant: inverse WHT on attention output (non-FA path)
+        if (v->type == GGML_TYPE_TURBO3_0 || v->type == GGML_TYPE_TURBO4_0 || v->type == GGML_TYPE_TURBO2_0) {
+            const bool k_is_turbo = (k->type == GGML_TYPE_TURBO3_0 || k->type == GGML_TYPE_TURBO4_0 || k->type == GGML_TYPE_TURBO2_0);
+            const ggml_tensor * group_src = k_is_turbo ? k : v;
+            const int turbo_group = (group_src->ne[0] % 128 == 0) ? 128 : 64;
+            if (kqv->ne[0] % turbo_group == 0) {
+                if (!ggml_is_contiguous(kqv)) { kqv = ggml_cont(ctx0, kqv); }
+                ggml_tensor * innerq_scale = mctx ? mctx->get_turbo_innerq_scale_inv() : nullptr;
+                kqv = ggml_turbo_wht(ctx0, kqv, 1, turbo_group, innerq_scale);
+            }
+        }
 
 
         // for MLA with the absorption optimization, we need to "decompress" from MQA back to MHA
@@ -2234,29 +2253,29 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    // TurboQuant: dequantize K/V cache to F32 before attention
-    // SYCL backend cannot operate directly on turbo types
+    // NOTE: When turbo cache types are used with SYCL, the cache is allocated
+    // as F32 (not turbo-compressed) because SYCL get_rows lacks turbo dequantize.
+    // So K/V are already F32 and no WHT/dequantization is needed here.
+    // WHT pre-rotate + inverse WHT are only used when turbo types are stored
+    // natively in the KV cache (requires custom FA kernels).
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+
+    // Inverse WHT on attention output when turbo types are active
     {
         auto is_turbo = [](ggml_type t) -> bool {
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
                    t == GGML_TYPE_TURBO4_0;
         };
         if (is_turbo(k->type)) {
-            ggml_tensor * k_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, k->ne[0], k->ne[1], k->ne[2]);
-            k = ggml_cpy(ctx0, k, k_f32);
-        }
-        if (is_turbo(v->type)) {
-            ggml_tensor * v_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, v->ne[0], v->ne[1], v->ne[2]);
-            v = ggml_cpy(ctx0, v, v_f32);
+            const int turbo_group = (k->ne[0] % 128 == 0) ? 128 : 64;
+            if (cur->ne[0] % turbo_group == 0) {
+                if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
+                ggml_tensor * innerq_scale = mctx_cur->get_turbo_innerq_scale_inv();
+                cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group, innerq_scale);  // 1 = inverse WHT
+            }
         }
     }
-
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
-
-    // NOTE: TurboQuant WHT pre-rotate and inverse WHT are NOT applied here
-    // because we dequantize K/V to F32 before attention. The WHT path is only
-    // needed when using custom FA kernels that read turbo types directly.
-    // Without those kernels, we use standard FA on dequantized F32 data.
 
     cb(cur, "kqv_out", il);
 
