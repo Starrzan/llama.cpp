@@ -2253,72 +2253,22 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    // TurboQuant: WHT pre-rotate queries when turbo cache types are active
-    auto is_turbo = [](ggml_type t) -> bool {
-        return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
-               t == GGML_TYPE_TURBO4_0;
-    };
-    if (is_turbo(k->type) || is_turbo(v->type)) {
-        if (q->ne[0] % 128 != 0) {
-            const int64_t pad = ((q->ne[0] + 127) / 128) * 128 - q->ne[0];
-            q = ggml_pad(ctx0, q, pad, 0, 0, 0);
-        }
-        if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
-        ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
-        q = ggml_turbo_wht(ctx0, q, 0, 0, scale); // forward WHT
-    }
-
-    // TurboQuant: if cache is turbo-allocated, decompress to F32 before attention.
-    // Uses get_rows with identity indices to dequantize turbo → F32.
-    {
-        if (is_turbo(k->type)) {
-            int64_t n_rows = k->ne[1] * k->ne[2] * k->ne[3];
-            // Create identity index tensor [0, 1, 2, ..., n_rows-1]
-            ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
-            // Fill with identity indices
-            int32_t * ids_data = (int32_t *) ids->data;
-            for (int64_t i = 0; i < n_rows; i++) ids_data[i] = (int32_t)i;
-            k = ggml_get_rows(ctx0, k, ids);
-            // Apply WHT rotation for turbo domain matching
-            if (k->ne[0] % 128 == 0) {
-                if (!ggml_is_contiguous(k)) { k = ggml_cont(ctx0, k); }
-                ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
-                k = ggml_turbo_wht(ctx0, k, 0, 0, scale);
-            }
-        }
-        if (is_turbo(v->type)) {
-            int64_t n_rows = v->ne[1] * v->ne[2] * v->ne[3];
-            ggml_tensor * ids = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_rows);
-            int32_t * ids_data = (int32_t *) ids->data;
-            for (int64_t i = 0; i < n_rows; i++) ids_data[i] = (int32_t)i;
-            v = ggml_get_rows(ctx0, v, ids);
-            if (v->ne[0] % 128 == 0) {
-                if (!ggml_is_contiguous(v)) { v = ggml_cont(ctx0, v); }
-                ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
-                v = ggml_turbo_wht(ctx0, v, 0, 0, scale);
-            }
-        }
-    }
-
-    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
-
-    // Inverse WHT on attention output when turbo types are active
+    // NOTE: Turbo types are not supported on SYCL due to scheduler limitations.
+    // When turbo cache types are requested with GPU offload, they fall back to F16.
+    // Turbo types work correctly on CPU backend.
     {
         auto is_turbo = [](ggml_type t) -> bool {
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
                    t == GGML_TYPE_TURBO4_0;
         };
-        // Check original cache type (before decompress)
-        ggml_tensor * v_check = mctx_cur->get_v(ctx0, il);
-        if (is_turbo(v_check->type)) {
-            const int turbo_group = (v_check->ne[0] % 128 == 0) ? 128 : 64;
-            if (cur->ne[0] % turbo_group == 0) {
-                if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
-                ggml_tensor * innerq_scale = mctx_cur->get_turbo_innerq_scale_inv();
-                cur = ggml_turbo_wht(ctx0, cur, 1, turbo_group, innerq_scale); // inverse WHT
-            }
+        if (is_turbo(k->type) || is_turbo(v->type)) {
+            LLAMA_LOG_WARN("%s: turbo KV cache requested but falling back to F16 on GPU\n", __func__);
         }
     }
+
+    ggml_tensor * cur = build_attn_mha(q, k, v, kq_b, kq_mask, sinks, v_mla, kq_scale, il);
+
+    // No WHT for SYCL path (turbo not supported)
 
     cb(cur, "kqv_out", il);
 

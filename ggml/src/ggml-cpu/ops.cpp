@@ -565,8 +565,23 @@ void ggml_compute_forward_dup(
         default:
             {
                 if (ggml_is_quantized(src0->type) && dst->type == GGML_TYPE_F32) {
-                    ggml_compute_forward_dup_from_q(params, dst);
-                    break;
+                    // Simple type conversion: quantized → F32
+                    // Use to_float directly (not dup_from_q which needs indices)
+                    ggml_to_float_t to_float = ggml_get_type_traits(src0->type)->to_float;
+                    if (to_float) {
+                        GGML_ASSERT(dst->src[0] != NULL);
+                        // Flatten and dequantize all elements
+                        int64_t n = ggml_nelements(src0);
+                        int64_t n_per_row = src0->ne[0];
+                        int64_t n_rows = n / n_per_row;
+                        for (int64_t i = 0; i < n_rows; i++) {
+                            to_float(
+                                (const void *)((char *)src0->data + i * src0->nb[1]),
+                                (float *)((char *)dst->data + i * dst->nb[1]),
+                                n_per_row);
+                        }
+                        break;
+                    }
                 }
                 GGML_ABORT("fatal error");
             }

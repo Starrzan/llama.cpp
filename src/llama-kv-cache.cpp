@@ -232,16 +232,14 @@ llama_kv_cache::llama_kv_cache(
             };
             auto * dev = model.dev_layer(il);
             if (is_turbo(type_k) || is_turbo(type_v)) {
-                // Force CPU buffer for turbo KV cache.
-                // The graph builder will insert decompress (turbo→F32) before attention
-                // and WHT rotation for domain matching. This avoids scheduler issues
-                // with mixed turbo/F32 tensors on SYCL.
-                buft = ggml_backend_cpu_buffer_type();
-                dev_name = "CPU (turbo)";
-            } else {
-                buft = ggml_backend_dev_buffer_type(dev);
-                dev_name = ggml_backend_dev_name(dev);
+                // Force F16 on GPU — turbo not natively supported on SYCL
+                type_k = GGML_TYPE_F16;
+                type_v = GGML_TYPE_F16;
+                LLAMA_LOG_INFO("%s: turbo KV cache → F16 on %s\n", __func__,
+                               ggml_backend_dev_name(dev));
             }
+            buft = ggml_backend_dev_buffer_type(dev);
+            dev_name = ggml_backend_dev_name(dev);
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
