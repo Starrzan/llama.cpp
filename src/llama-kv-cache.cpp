@@ -223,14 +223,24 @@ llama_kv_cache::llama_kv_cache(
         const uint32_t n_embd_v_gqa = !v_trans ? hparams.n_embd_v_gqa(il) : hparams.n_embd_v_gqa_max();
 
         const char * dev_name = "CPU";
-
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
         if (offload) {
-            auto * dev = model.dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
-
-            dev_name = ggml_backend_dev_name(dev);
+            // TurboQuant types are not supported by GPU backends natively.
+            // Force CPU allocation so the scheduler can copy between CPU/GPU.
+            auto is_turbo = [](ggml_type t) -> bool {
+                return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
+                       t == GGML_TYPE_TURBO4_0;
+            };
+            if (!is_turbo(type_k) && !is_turbo(type_v)) {
+                auto * dev = model.dev_layer(il);
+                buft = ggml_backend_dev_buffer_type(dev);
+                dev_name = ggml_backend_dev_name(dev);
+            } else {
+                LLAMA_LOG_INFO("%s: turbo KV cache type detected (k=%s, v=%s) — forcing CPU allocation\n",
+                               __func__, ggml_type_name(type_k), ggml_type_name(type_v));
+                dev_name = "CPU (turbo)";
+            }
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
