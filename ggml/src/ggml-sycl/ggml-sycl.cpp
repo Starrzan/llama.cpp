@@ -452,6 +452,27 @@ ggml_backend_sycl_buffer_init_tensor(ggml_backend_buffer_t buffer,
     GGML_SYCL_DEBUG("%s", debug_get_tensor_str(": tensor", tensor, "\n").c_str());
     ggml_backend_sycl_buffer_context * ctx = (ggml_backend_sycl_buffer_context *)buffer->context;
 
+    // TurboQuant types: SYCL backend doesn't support these natively.
+    // Reject allocation so tensors fall through to CPU backend.
+    // Check both the tensor itself and its view source (if any).
+    {
+        auto is_turbo = [](ggml_type t) -> bool {
+            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
+                   t == GGML_TYPE_TURBO4_0 || t == GGML_TYPE_TQ3_1S ||
+                   t == GGML_TYPE_TQ4_1S;
+        };
+        if (is_turbo(tensor->type)) {
+            GGML_LOG_WARN("[SYCL] rejecting turbo type %s for tensor %s\n",
+                          ggml_type_name(tensor->type), tensor->name);
+            return GGML_STATUS_FAILED;
+        }
+        if (tensor->view_src && is_turbo(tensor->view_src->type)) {
+            GGML_LOG_WARN("[SYCL] rejecting view of turbo type %s for tensor %s\n",
+                          ggml_type_name(tensor->view_src->type), tensor->name);
+            return GGML_STATUS_FAILED;
+        }
+    }
+
     if (tensor->view_src != NULL) {
         assert(tensor->view_src->buffer->buft == buffer->buft);
         return GGML_STATUS_SUCCESS;

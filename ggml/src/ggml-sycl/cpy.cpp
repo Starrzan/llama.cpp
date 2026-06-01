@@ -1,11 +1,21 @@
 #include "cpy.hpp"
 
 #include <float.h>
+#include <cstdlib>
 
 #include "dequantize.hpp"
 #include "ggml-sycl/common.hpp"
 #include "ggml-sycl/presets.hpp"
 #include "ggml.h"
+#include "ggml-quants.h"
+
+// TurboQuant CPU fallback function declarations
+static void ggml_sycl_cpy_turbo_to_f32(ggml_backend_sycl_context & ctx,
+                                        const ggml_tensor * src, const ggml_tensor * dst,
+                                        ggml_type turbo_type);
+static void ggml_sycl_cpy_f32_to_turbo(ggml_backend_sycl_context & ctx,
+                                        const ggml_tensor * src, const ggml_tensor * dst,
+                                        ggml_type turbo_type);
 
 
 static void cpy_1_f32_f32(const char * cxi, char * cdsti) {
@@ -586,6 +596,25 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
         ggml_cpy_q4_0_q4_0(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
     } else if (src0->type == GGML_TYPE_Q4_1 && src1->type == GGML_TYPE_Q4_1) {
         ggml_cpy_q4_1_q4_1(src0_ddc, src1_ddc, ne, ne00, ne01, ne02, nb00, nb01, nb02, nb03, ne10, ne11, ne12, nb10, nb11, nb12, nb13, main_stream);
+    } else if (src0->type == GGML_TYPE_TURBO2_0 && src1->type == GGML_TYPE_F32) {
+        // TurboQuant dequantize: GGML_TYPE_TURBO2_0 → F32 (CPU fallback)
+        GGML_SYCL_DEBUG("%s: GGML_TYPE_TURBO2_0 to F32 (CPU fallback)\n", __func__);
+        ggml_sycl_cpy_turbo_to_f32(ctx, src0, src1, GGML_TYPE_TURBO2_0);
+    } else if (src0->type == GGML_TYPE_TURBO3_0 && src1->type == GGML_TYPE_F32) {
+        GGML_SYCL_DEBUG("%s: GGML_TYPE_TURBO3_0 to F32 (CPU fallback)\n", __func__);
+        ggml_sycl_cpy_turbo_to_f32(ctx, src0, src1, GGML_TYPE_TURBO3_0);
+    } else if (src0->type == GGML_TYPE_TURBO4_0 && src1->type == GGML_TYPE_F32) {
+        GGML_SYCL_DEBUG("%s: GGML_TYPE_TURBO4_0 to F32 (CPU fallback)\n", __func__);
+        ggml_sycl_cpy_turbo_to_f32(ctx, src0, src1, GGML_TYPE_TURBO4_0);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TURBO2_0) {
+        GGML_SYCL_DEBUG("%s: F32 to GGML_TYPE_TURBO2_0 (CPU fallback)\n", __func__);
+        ggml_sycl_cpy_f32_to_turbo(ctx, src0, src1, GGML_TYPE_TURBO2_0);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TURBO3_0) {
+        GGML_SYCL_DEBUG("%s: F32 to GGML_TYPE_TURBO3_0 (CPU fallback)\n", __func__);
+        ggml_sycl_cpy_f32_to_turbo(ctx, src0, src1, GGML_TYPE_TURBO3_0);
+    } else if (src0->type == GGML_TYPE_F32 && src1->type == GGML_TYPE_TURBO4_0) {
+        GGML_SYCL_DEBUG("%s: F32 to GGML_TYPE_TURBO4_0 (CPU fallback)\n", __func__);
+        ggml_sycl_cpy_f32_to_turbo(ctx, src0, src1, GGML_TYPE_TURBO4_0);
     } else {
         GGML_LOG_ERROR("%s: unsupported type combination (%s to %s)\n", __func__, ggml_type_name(src0->type),
                        ggml_type_name(src1->type));
@@ -599,4 +628,115 @@ void ggml_sycl_cpy(ggml_backend_sycl_context & ctx, const ggml_tensor * src0, co
 void ggml_sycl_dup(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
     scope_op_debug_print scope_dbg_print(__func__, dst, /*num_src=*/1);
     ggml_sycl_cpy(ctx, dst->src[0], dst);
+}
+
+// TurboQuant CPU fallback helpers
+// These copy data to host, run CPU dequantize/quantize, and copy back.
+// Not optimal for performance but correct and functional.
+
+static void ggml_sycl_cpy_turbo_to_f32(ggml_backend_sycl_context & ctx,
+                                        const ggml_tensor * src, const ggml_tensor * dst,
+                                        ggml_type turbo_type) {
+    const int64_t ne = ggml_nelements(src);
+    const size_t src_size = ggml_nbytes(src);
+    const size_t dst_size = ggml_nbytes(dst);
+
+    // Allocate host buffers
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    dpct::queue_ptr stream = ctx.stream();
+    void * host_src = (void *)malloc(src_size);
+    void * host_dst = (void *)malloc(dst_size);
+    if (!host_src || !host_dst) {
+        GGML_ABORT("failed to allocate host memory for turbo dequantize");
+    }
+
+    // Copy device → host
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    char * src_d = (char *)src->data;
+    ctx.stream()->memcpy(host_src, src_d, src_size);
+    ctx.stream()->wait();
+
+    // Dequantize on CPU
+    if (turbo_type == GGML_TYPE_TURBO2_0) {
+        const int64_t nb = ne / 128;
+        for (int64_t i = 0; i < nb; i++) {
+            dequantize_row_turbo2_0((const block_turbo2_0 *)host_src + i,
+                                         (float *)host_dst + i * 128, 128);
+        }
+    } else if (turbo_type == GGML_TYPE_TURBO3_0) {
+        const int64_t nb = ne / 128;
+        for (int64_t i = 0; i < nb; i++) {
+            dequantize_row_turbo3_0((const block_turbo3_0 *)host_src + i,
+                                         (float *)host_dst + i * 128, 128);
+        }
+    } else if (turbo_type == GGML_TYPE_TURBO4_0) {
+        const int64_t nb = ne / 128;
+        for (int64_t i = 0; i < nb; i++) {
+            dequantize_row_turbo4_0((const block_turbo4_0 *)host_src + i,
+                                         (float *)host_dst + i * 128, 128);
+        }
+    }
+
+    // Copy host → device (into a temp buffer first, then into the dst tensor's buffer)
+    // Use ggml_backend_tensor_get/put for proper buffer handling
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    char * dst_d = (char *)dst->data;
+    ctx.stream()->memcpy(dst_d, host_dst, dst_size);
+    ctx.stream()->wait();
+
+    free(host_src);
+    free(host_dst);
+}
+
+static void ggml_sycl_cpy_f32_to_turbo(ggml_backend_sycl_context & ctx,
+                                        const ggml_tensor * src, const ggml_tensor * dst,
+                                        ggml_type turbo_type) {
+    const int64_t ne = ggml_nelements(src);
+    const size_t src_size = ggml_nbytes(src);
+    const size_t dst_size = ggml_nbytes(dst);
+
+    // Allocate host buffers
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    dpct::queue_ptr stream = ctx.stream();
+    void * host_src = (void *)malloc(src_size);
+    void * host_dst = (void *)malloc(dst_size);
+    if (!host_src || !host_dst) {
+        GGML_ABORT("failed to allocate host memory for turbo quantize");
+    }
+
+    // Copy device → host
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    char * src_d = (char *)src->data;
+    ctx.stream()->memcpy(host_src, src_d, src_size);
+    ctx.stream()->wait();
+
+    // Quantize on CPU
+    if (turbo_type == GGML_TYPE_TURBO2_0) {
+        const int64_t nb = ne / 128;
+        for (int64_t i = 0; i < nb; i++) {
+            quantize_row_turbo2_0_ref((const float *)host_src + i * 128,
+                                       (block_turbo2_0 *)host_dst + i, 128);
+        }
+    } else if (turbo_type == GGML_TYPE_TURBO3_0) {
+        const int64_t nb = ne / 128;
+        for (int64_t i = 0; i < nb; i++) {
+            quantize_row_turbo3_0_ref((const float *)host_src + i * 128,
+                                       (block_turbo3_0 *)host_dst + i, 128);
+        }
+    } else if (turbo_type == GGML_TYPE_TURBO4_0) {
+        const int64_t nb = ne / 128;
+        for (int64_t i = 0; i < nb; i++) {
+            quantize_row_turbo4_0_ref((const float *)host_src + i * 128,
+                                       (block_turbo4_0 *)host_dst + i, 128);
+        }
+    }
+
+    // Copy host → device
+    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
+    char * dst_d = (char *)dst->data;
+    ctx.stream()->memcpy(dst_d, host_dst, dst_size);
+    ctx.stream()->wait();
+
+    free(host_src);
+    free(host_dst);
 }
