@@ -887,6 +887,12 @@ static int ggml_backend_sched_backend_id_from_cur(ggml_backend_sched_t sched, st
     if (tensor->view_src != NULL) {
         cur_backend_id = ggml_backend_sched_backend_from_buffer(sched, tensor->view_src, tensor);
         if (cur_backend_id != -1) {
+            // Check if the selected backend actually supports the op for this tensor type
+            if (!ggml_backend_supports_op(sched->backends[cur_backend_id], tensor)) {
+                cur_backend_id = -1;  // Force fallback to another backend
+            }
+        }
+        if (cur_backend_id != -1) {
             SET_CAUSE(tensor, "1.vsrc");
             return cur_backend_id;
         }
