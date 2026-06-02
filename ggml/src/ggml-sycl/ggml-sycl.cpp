@@ -5021,9 +5021,9 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
         (ggml_backend_sycl_device_context *)dev->context;
     int device = sycl_ctx->device;
 
-    // TurboQuant types: only allow data-movement ops.
-    // Rejecting everything else forces the scheduler to split the graph
-    // at turbo boundaries, inserting CPY ops between CPU(turbo) and GPU(f32).
+    // TurboQuant types: allow data-movement ops on SYCL (view, cpy, cont, reshape, transpose)
+    // but reject compute ops (mul_mat, flash_attn, etc.) so the graph is split
+    // at turbo boundaries by the scheduler, routing compute to the next backend.
     {
         auto is_turbo = [](ggml_type t) -> bool {
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
@@ -5036,10 +5036,22 @@ static bool ggml_backend_sycl_device_supports_op(ggml_backend_dev_t dev, const g
                 if (is_turbo(op->src[i]->type)) { has_turbo = true; break; }
             }
         }
-        // Allow turbo types to be processed on CPU backend (index 0)
-        // but reject on SYCL to force scheduler splitting
         if (has_turbo && device > 0) {
-            return false;
+            switch (op->op) {
+                case GGML_OP_NONE:
+                case GGML_OP_VIEW:
+                case GGML_OP_CPY:
+                case GGML_OP_CONT:
+                case GGML_OP_RESHAPE:
+                case GGML_OP_PERMUTE:
+                case GGML_OP_TRANSPOSE:
+                case GGML_OP_GET_ROWS:
+                case GGML_OP_ADD:
+                case GGML_OP_TURBO_WHT:
+                    return true;
+                default:
+                    return false;
+            }
         }
     }
 

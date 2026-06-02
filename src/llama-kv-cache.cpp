@@ -226,11 +226,23 @@ llama_kv_cache::llama_kv_cache(
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
         if (offload) {
+            auto is_turbo = [](ggml_type t) -> bool {
+                return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
+                       t == GGML_TYPE_TURBO4_0;
+            };
             auto * dev = model.dev_layer(il);
-            buft = ggml_backend_dev_buffer_type(dev);
-            dev_name = ggml_backend_dev_name(dev);
-            // Turbo types are now supported on SYCL via on-GPU dequantization kernel
-            // They stay in turbo format and get decompressed by ggml_cpy in the graph
+            if (is_turbo(type_k) || is_turbo(type_v)) {
+                // Turbo KV cache must be on CPU buffer.
+                // The graph builder will insert ggml_cpy ops to convert
+                // turbo(CPU) → F32(SYCL) before attention computation.
+                // This avoids the scheduler partitioning issue where
+                // pre-allocated turbo tensors on SYCL can't be moved.
+                buft = ggml_backend_cpu_buffer_type();
+                dev_name = "CPU (turbo)";
+            } else {
+                buft = ggml_backend_dev_buffer_type(dev);
+                dev_name = ggml_backend_dev_name(dev);
+            }
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
