@@ -226,20 +226,11 @@ llama_kv_cache::llama_kv_cache(
         ggml_backend_buffer_type_t buft = ggml_backend_cpu_buffer_type();
 
         if (offload) {
-            auto is_turbo = [](ggml_type t) -> bool {
-                return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
-                       t == GGML_TYPE_TURBO4_0;
-            };
             auto * dev = model.dev_layer(il);
-            if (is_turbo(type_k) || is_turbo(type_v)) {
-                // Force F16 on GPU — turbo not natively supported on SYCL
-                type_k = GGML_TYPE_F16;
-                type_v = GGML_TYPE_F16;
-                LLAMA_LOG_INFO("%s: turbo KV cache → F16 on %s\n", __func__,
-                               ggml_backend_dev_name(dev));
-            }
             buft = ggml_backend_dev_buffer_type(dev);
             dev_name = ggml_backend_dev_name(dev);
+            // Turbo types are now supported on SYCL via on-GPU dequantization kernel
+            // They stay in turbo format and get decompressed by ggml_cpy in the graph
         }
 
         LLAMA_LOG_DEBUG("%s: layer %3d: dev = %s\n", __func__, il, dev_name);
