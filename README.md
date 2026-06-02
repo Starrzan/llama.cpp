@@ -1,13 +1,5 @@
 # llama.cpp — Starrzan Fork
 
-```
-    __    __    ___    __  ______     __________  ____
-   / /   / /   /   |  /  |/  /   |   / ____/ __ \/ __ \
-  / /   / /   / /| | / /|_/ / /| |  / /   / /_/ / /_/ /
- / /___/ /___/ ___ |/ /  / / ___ |_/ /___/ ____/ ____/
-/_____/_____/_/  |_/_/  /_/_/  |_(_)____/_/   /_/
-```
-
 **Custom fork of [llama.cpp](https://github.com/ggml-org/llama.cpp) optimized for Intel Arc (SYCL) with TurboQuant KV cache compression.**
 
 ## What's different from upstream
