@@ -2253,37 +2253,34 @@ ggml_tensor * llm_graph_context::build_attn(
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
 
-    // TurboQuant: if cache is turbo-allocated, decompress to F32 before attention.
-    // With SYCL on-GPU dequantization kernel, this runs entirely on GPU.
+    // TurboQuant: if cache types are turbo, apply WHT domain matching
     {
         auto is_turbo = [](ggml_type t) -> bool {
             return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
                    t == GGML_TYPE_TURBO4_0;
         };
+        bool use_wht = is_turbo(k->type) || is_turbo(v->type);
+
         if (is_turbo(k->type)) {
+            // Decompress turbo K to F32
             ggml_tensor * k_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, k->ne[0], k->ne[1], k->ne[2]);
             k = ggml_cpy(ctx0, k, k_f32);
-            // WHT rotation for turbo domain matching
-            if (k->ne[0] % 128 == 0) {
-                if (!ggml_is_contiguous(k)) { k = ggml_cont(ctx0, k); }
-                ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
-                k = ggml_turbo_wht(ctx0, k, 0, 0, scale); // forward WHT
-            }
         }
         if (is_turbo(v->type)) {
+            // Decompress turbo V to F32
             ggml_tensor * v_f32 = ggml_new_tensor_3d(ctx0, GGML_TYPE_F32, v->ne[0], v->ne[1], v->ne[2]);
             v = ggml_cpy(ctx0, v, v_f32);
-            if (v->ne[0] % 128 == 0) {
-                if (!ggml_is_contiguous(v)) { v = ggml_cont(ctx0, v); }
-                ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
-                v = ggml_turbo_wht(ctx0, v, 0, 0, scale);
-            }
         }
-        // WHT pre-rotate queries to match turbo domain
-        if (is_turbo(k->type) || is_turbo(v->type)) {
+
+        if (use_wht) {
+            // WHT rotate K, V, and Q to match turbo domain
+            if (!ggml_is_contiguous(k)) { k = ggml_cont(ctx0, k); }
+            if (!ggml_is_contiguous(v)) { v = ggml_cont(ctx0, v); }
             if (!ggml_is_contiguous(q)) { q = ggml_cont(ctx0, q); }
             ggml_tensor * scale = mctx_cur->get_turbo_innerq_scale_inv();
-            q = ggml_turbo_wht(ctx0, q, 0, 0, scale); // forward WHT
+            k = ggml_turbo_wht(ctx0, k, 0, 0, scale); // forward WHT on K
+            v = ggml_turbo_wht(ctx0, v, 0, 0, scale); // forward WHT on V
+            q = ggml_turbo_wht(ctx0, q, 0, 0, scale); // forward WHT on Q
         }
     }
 
@@ -2291,12 +2288,8 @@ ggml_tensor * llm_graph_context::build_attn(
 
     // Inverse WHT on attention output when turbo types are active
     {
-        auto is_turbo = [](ggml_type t) -> bool {
-            return t == GGML_TYPE_TURBO2_0 || t == GGML_TYPE_TURBO3_0 ||
-                   t == GGML_TYPE_TURBO4_0;
-        };
         ggml_tensor * v_check = mctx_cur->get_v(ctx0, il);
-        if (is_turbo(v_check->type)) {
+        if (v_check->type == GGML_TYPE_TURBO2_0 || v_check->type == GGML_TYPE_TURBO3_0 || v_check->type == GGML_TYPE_TURBO4_0) {
             const int turbo_group = (v_check->ne[0] % 128 == 0) ? 128 : 64;
             if (cur->ne[0] % turbo_group == 0) {
                 if (!ggml_is_contiguous(cur)) { cur = ggml_cont(ctx0, cur); }
