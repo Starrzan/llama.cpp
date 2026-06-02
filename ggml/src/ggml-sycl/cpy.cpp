@@ -637,55 +637,99 @@ void ggml_sycl_dup(ggml_backend_sycl_context & ctx, ggml_tensor * dst) {
 static void ggml_sycl_cpy_turbo_to_f32(ggml_backend_sycl_context & ctx,
                                         const ggml_tensor * src, const ggml_tensor * dst,
                                         ggml_type turbo_type) {
-    const int64_t ne = ggml_nelements(src);
-    const size_t src_size = ggml_nbytes(src);
-    const size_t dst_size = ggml_nbytes(dst);
-
-    // Allocate host buffers
+    // Use SYCL kernel for on-GPU dequantization — avoids device↔host round-trip
     SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     dpct::queue_ptr stream = ctx.stream();
-    void * host_src = (void *)malloc(src_size);
-    void * host_dst = (void *)malloc(dst_size);
-    if (!host_src || !host_dst) {
-        GGML_ABORT("failed to allocate host memory for turbo dequantize");
-    }
 
-    // Copy device → host
-    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
     char * src_d = (char *)src->data;
-    ctx.stream()->memcpy(host_src, src_d, src_size);
-    ctx.stream()->wait();
+    float * dst_d = (float *)dst->data;
+    const int64_t ne = ggml_nelements(src);
+    const int d = 128; // block size
+    const int nb = ne / d; // total blocks
 
-    // Dequantize on CPU
-    if (turbo_type == GGML_TYPE_TURBO2_0) {
-        const int64_t nb = ne / 128;
-        for (int64_t i = 0; i < nb; i++) {
-            dequantize_row_turbo2_0((const block_turbo2_0 *)host_src + i,
-                                         (float *)host_dst + i * 128, 128);
+    const sycl::range<3> block_dims(1, 1, d);
+    const sycl::range<3> block_nums(nb, 1, 1);
+
+    // Select kernel based on turbo type
+    switch (turbo_type) {
+        case GGML_TYPE_TURBO3_0: {
+            stream->parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item) {
+                    const int ib = item.get_group(1);
+                    const int ii = item.get_local_id(2);
+                    if (ib >= nb) return;
+
+                    const block_turbo3_0 * blk = (const block_turbo3_0 *)(src_d + ib * sizeof(block_turbo3_0));
+                    float norm = GGML_FP16_TO_FP32(blk->norm);
+
+                    // Extract 3-bit index from packed qs
+                    int bit_offset = ii * 3;
+                    int byte_idx = bit_offset / 8;
+                    int bit_pos = bit_offset % 8;
+                    uint16_t raw = (uint16_t)blk->qs[byte_idx];
+                    if (byte_idx + 1 < 48) raw |= (uint16_t)blk->qs[byte_idx + 1] << 8;
+                    int lo3 = (raw >> bit_pos) & 0x7;
+
+                    // Extract 1-bit sign
+                    int hi1 = (blk->signs[ii / 8] & (1 << (ii % 8))) ? 1 : 0;
+                    int idx = lo3 | (hi1 << 3);
+
+                    // 4-bit centroid table for turbo3
+                    float val = 0.0f;
+                    switch (idx) {
+                        case 0:  val = -0.5642f; break;
+                        case 1:  val = -0.3845f; break;
+                        case 2:  val = -0.2623f; break;
+                        case 3:  val = -0.1641f; break;
+                        case 4:  val = -0.0774f; break;
+                        case 5:  val = -0.0250f; break;
+                        case 6:  val =  0.0000f; break;
+                        case 7:  val =  0.0250f; break;
+                        case 8:  val =  0.0774f; break;
+                        case 9:  val =  0.1641f; break;
+                        case 10: val =  0.2623f; break;
+                        case 11: val =  0.3845f; break;
+                        case 12: val =  0.5642f; break;
+                        case 13: val =  0.7845f; break;
+                        case 14: val =  1.0623f; break;
+                        case 15: val =  1.4641f; break;
+                    }
+                    dst_d[ib * 128 + ii] = val * norm;
+                });
+            break;
         }
-    } else if (turbo_type == GGML_TYPE_TURBO3_0) {
-        const int64_t nb = ne / 128;
-        for (int64_t i = 0; i < nb; i++) {
-            dequantize_row_turbo3_0((const block_turbo3_0 *)host_src + i,
-                                         (float *)host_dst + i * 128, 128);
+        case GGML_TYPE_TURBO2_0: {
+            stream->parallel_for(
+                sycl::nd_range<3>(block_nums * block_dims, block_dims),
+                [=](sycl::nd_item<3> item) {
+                    const int ib = item.get_group(1);
+                    const int ii = item.get_local_id(2);
+                    if (ib >= nb) return;
+
+                    const block_turbo2_0 * blk = (const block_turbo2_0 *)(src_d + ib * sizeof(block_turbo2_0));
+                    float norm = GGML_FP16_TO_FP32(blk->norm);
+
+                    // Extract 2-bit index from packed qs
+                    int idx = (blk->qs[ii / 4] >> ((ii % 4) * 2)) & 0x3;
+
+                    float val = 0.0f;
+                    switch (idx) {
+                        case 0: val = -0.5133f; break;
+                        case 1: val = -0.1689f; break;
+                        case 2: val =  0.1689f; break;
+                        case 3: val =  0.5133f; break;
+                    }
+                    dst_d[ib * 128 + ii] = val * norm;
+                });
+            break;
         }
-    } else if (turbo_type == GGML_TYPE_TURBO4_0) {
-        const int64_t nb = ne / 128;
-        for (int64_t i = 0; i < nb; i++) {
-            dequantize_row_turbo4_0((const block_turbo4_0 *)host_src + i,
-                                         (float *)host_dst + i * 128, 128);
-        }
+        default:
+            GGML_ABORT("unsupported turbo type for SYCL dequantize");
     }
 
-    // Copy host → device (into a temp buffer first, then into the dst tensor's buffer)
-    // Use ggml_backend_tensor_get/put for proper buffer handling
-    SYCL_CHECK(ggml_sycl_set_device(ctx.device));
-    char * dst_d = (char *)dst->data;
-    ctx.stream()->memcpy(dst_d, host_dst, dst_size);
-    ctx.stream()->wait();
-
-    free(host_src);
-    free(host_dst);
+    // Don't use SYCL_CHECK for wait() — it returns void and the macro tries to auto-capture the result
+    stream->wait();
 }
 
 static void ggml_sycl_cpy_f32_to_turbo(ggml_backend_sycl_context & ctx,
