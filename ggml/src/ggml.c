@@ -932,6 +932,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 128,
         .type_size                = 10,
         .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo2_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_turbo2_0_ref,
     },
     [43] = {
@@ -939,6 +940,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 128,
         .type_size                = 14,
         .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo3_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_turbo3_0_ref,
     },
     [44] = {
@@ -946,6 +948,7 @@ static const struct ggml_type_traits type_traits[GGML_TYPE_COUNT] = {
         .blck_size                = 128,
         .type_size                = 68,
         .is_quantized             = true,
+        .to_float                 = (ggml_to_float_t) dequantize_row_turbo4_0,
         .from_float_ref           = (ggml_from_float_t) quantize_row_turbo4_0_ref,
     },
     [45] = {

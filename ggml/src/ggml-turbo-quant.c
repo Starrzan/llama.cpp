@@ -22,6 +22,7 @@
 
 /* Forward declarations for GGML_API symbols defined in this file (satisfies
  * -Wmissing-prototypes under upstream CI's -Werror policy). */
+GGML_API void turbo_cpu_fwht(float * x, int group_size);
 GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size);
 GGML_API void quantize_row_tq3_1s_ref(const float * GGML_RESTRICT x, block_tq3_1s * GGML_RESTRICT y, int64_t k);
 GGML_API void dequantize_row_tq3_1s(const block_tq3_1s * GGML_RESTRICT x, float * GGML_RESTRICT y, int64_t k);
@@ -223,7 +224,7 @@ static const float turbo_cpu_s2[128] = {
 
 /* ---------- CPU forward WHT (in-place, group_size elements) ---------- */
 
-static void turbo_cpu_fwht(float * x, int group_size) {
+void turbo_cpu_fwht(float * x, int group_size) {
     const float * s1 = turbo_cpu_s1;
     const float * s2 = turbo_cpu_s2;
     const float inv_sqrt = (group_size == 128) ? 0.08838834764831845f : 0.125f;

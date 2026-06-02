@@ -210,6 +210,20 @@ typedef pthread_t ggml_thread_t;
 #include <TargetConditionals.h>
 #endif
 
+// Forward declarations for turbo vec_dot functions (defined at end of file)
+void ggml_vec_dot_turbo2_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                               const void * GGML_RESTRICT vx, size_t bx,
+                               const void * GGML_RESTRICT vy, size_t by,
+                               int nrc);
+void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                               const void * GGML_RESTRICT vx, size_t bx,
+                               const void * GGML_RESTRICT vy, size_t by,
+                               int nrc);
+void ggml_vec_dot_turbo4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+                               const void * GGML_RESTRICT vx, size_t bx,
+                               const void * GGML_RESTRICT vy, size_t by,
+                               int nrc);
+
 static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
     [GGML_TYPE_F32] = {
         .from_float               = (ggml_from_float_t) ggml_cpu_fp32_to_fp32,
@@ -400,6 +414,24 @@ static const struct ggml_type_traits_cpu type_traits_cpu[GGML_TYPE_COUNT] = {
         .from_float               = quantize_row_tq2_0,
         .vec_dot                  = ggml_vec_dot_tq2_0_q8_K,
         .vec_dot_type             = GGML_TYPE_Q8_K,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBO2_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turbo2_0_ref,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turbo2_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBO3_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turbo3_0_ref,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turbo3_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
+        .nrows                    = 1,
+    },
+    [GGML_TYPE_TURBO4_0] = {
+        .from_float               = (ggml_from_float_t) quantize_row_turbo4_0_ref,
+        .vec_dot                  = (ggml_vec_dot_t) ggml_vec_dot_turbo4_0_f32,
+        .vec_dot_type             = GGML_TYPE_F32,
         .nrows                    = 1,
     },
     [GGML_TYPE_I32] = {
@@ -2111,8 +2143,49 @@ static void ggml_compute_forward(struct ggml_compute_params * params, struct ggm
             } break;
         case GGML_OP_TURBO_WHT:
             {
-                GGML_ABORT("GGML_OP_TURBO_WHT not implemented on CPU");
-            }
+                // WHT is applied per-row in-place on F32 data.
+                // op_params: [direction (int), group_size (int)]
+                // direction 0 = forward, 1 = inverse
+                const struct ggml_tensor * src0 = tensor->src[0];
+                const struct ggml_tensor * scale = tensor->src[1];
+                GGML_ASSERT(src0->type == GGML_TYPE_F32);
+                GGML_ASSERT(tensor->type == GGML_TYPE_F32);
+
+                int direction, group_size;
+                memcpy(&direction, tensor->op_params + 0, sizeof(int));
+                memcpy(&group_size, tensor->op_params + sizeof(int), sizeof(int));
+                if (group_size == 0) {
+                    group_size = (src0->ne[0] % 128 == 0) ? 128 : 64;
+                }
+
+                const int64_t n_rows = src0->ne[1] * src0->ne[2] * src0->ne[3];
+                const int64_t row_size = src0->ne[0];
+                const int64_t n_groups_per_row = row_size / group_size;
+
+                for (int64_t row = 0; row < n_rows; row++) {
+                    const float * row_data = (const float *)((char *)src0->data + row * src0->nb[1]);
+                    float * out_data = (float *)((char *)tensor->data + row * tensor->nb[1]);
+                    if (row_data != out_data) {
+                        memcpy(out_data, row_data, row_size * sizeof(float));
+                    }
+                    for (int64_t g = 0; g < n_groups_per_row; g++) {
+                        float * grp = out_data + g * group_size;
+                        if (direction == 0) {
+                            turbo_cpu_fwht(grp, group_size);
+                        } else {
+                            turbo_cpu_fwht_inverse(grp, group_size);
+                        }
+                    }
+                    // Apply innerq scale if provided
+                    if (scale) {
+                        const float * scale_data = (const float *)scale->data;
+                        const int64_t scale_ne0 = scale->ne[0];
+                        for (int64_t j = 0; j < row_size; j++) {
+                            out_data[j] *= scale_data[j % scale_ne0];
+                        }
+                    }
+                }
+            } break;
         case GGML_OP_COUNT:
             {
                 GGML_ABORT("fatal error");
@@ -3848,7 +3921,7 @@ void ggml_cpu_init(void) {
 // These dequantize on-the-fly and compute F32 dot product
 // Not optimal but functional for CPU fallback on SYCL
 
-static void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
                                        const void * GGML_RESTRICT vx, size_t bx,
                                        const void * GGML_RESTRICT vy, size_t by,
                                        int nrc) {
@@ -3867,7 +3940,7 @@ static void ggml_vec_dot_turbo3_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
     *s = sum;
 }
 
-static void ggml_vec_dot_turbo4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+void ggml_vec_dot_turbo4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
                                        const void * GGML_RESTRICT vx, size_t bx,
                                        const void * GGML_RESTRICT vy, size_t by,
                                        int nrc) {
@@ -3884,7 +3957,7 @@ static void ggml_vec_dot_turbo4_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
     *s = sum;
 }
 
-static void ggml_vec_dot_turbo2_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
+void ggml_vec_dot_turbo2_0_f32(int n, float * GGML_RESTRICT s, size_t bs,
                                        const void * GGML_RESTRICT vx, size_t bx,
                                        const void * GGML_RESTRICT vy, size_t by,
                                        int nrc) {

@@ -117,6 +117,10 @@ GGML_API void iq2xs_free_impl(enum ggml_type type);
 GGML_API void iq3xs_init_impl(int grid_size);
 GGML_API void iq3xs_free_impl(int grid_size);
 
+// TurboQuant WHT (Walsh-Hadamard Transform) for KV cache domain matching
+GGML_API void turbo_cpu_fwht(float * x, int group_size);
+GGML_API void turbo_cpu_fwht_inverse(float * x, int group_size);
+
 #ifdef __cplusplus
 }
 #endif
